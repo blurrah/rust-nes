@@ -144,6 +144,7 @@ impl CPU {
         }
     }
 
+
     /// Handle the LDA (load accumulator) instruction
     fn lda(&mut self, mode: &AddressingMode) {
         let address = self.get_operand_address(mode);
@@ -177,6 +178,15 @@ impl CPU {
         let value = self.mem_read(address);
 
         self.add_to_register_a(value);
+    }
+
+    /// Handle the SBC (subtract with carry) instruction
+    fn sbc(&mut self, mode: &AddressingMode) {
+        let address = self.get_operand_address(mode);
+        let value = self.mem_read(address);
+
+        // Thank god for rust and their wrapping operations
+        self.add_to_register_a(value.wrapping_neg().wrapping_sub(1) as u8);
     }
 
     fn add_to_register_a(&mut self, value: u8) {
@@ -243,6 +253,10 @@ impl CPU {
                 /* ADC */
                 0x69 | 0x65 | 0x75 | 0x6d | 0x7d | 0x79 | 0x61 | 0x71 => {
                     self.adc(&opcode.mode);
+                }
+                /* SBC */
+                0xe9 | 0xe5 | 0xf5 | 0xed | 0xfd | 0xf9 | 0xe1 | 0xf1 => {
+                    self.sbc(&opcode.mode);
                 }
                 // STA (store accumulator) opcodes
                 0x85 | 0x95 | 0x8d | 0x9d | 0x99 | 0x81 | 0x91 => {
@@ -342,6 +356,30 @@ mod test {
         let mut cpu = CPU::new();
         cpu.load_and_run(vec![0xa9, 0x7f, 0x69, 0x01, 0x00]);
         assert_eq!(cpu.register_a, 0x80);
+        assert!(cpu.status.contains(StatusFlags::OVERFLOW));
+    }
+
+    #[test]
+    fn test_sbc() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0x05, 0xe9, 0x05, 0x00]);
+        assert_eq!(cpu.register_a, 255);
+        assert!(!cpu.status.contains(StatusFlags::CARRY));
+    }
+
+    #[test]
+    fn test_sbc_carry() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0x06, 0xe9, 0x05, 0x00]);
+        assert_eq!(cpu.register_a, 0);
+        assert!(cpu.status.contains(StatusFlags::CARRY));
+    }
+
+    #[test]
+    fn test_sbc_overflow() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0x7f, 0xe9, 0x01, 0x00]);
+        assert_eq!(cpu.register_a, 0x7e);
         assert!(cpu.status.contains(StatusFlags::OVERFLOW));
     }
 
