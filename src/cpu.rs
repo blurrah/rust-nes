@@ -4,6 +4,19 @@ use crate::opcodes;
 const PROGRAM_COUNTER_START: u16 = 0xFFFC;
 const PROGRAM_MEMORY_START: u16 = 0x8000;
 
+bitflags! {
+    pub struct StatusFlags: u8 {
+        const CARRY = 0b0000_0001;
+        const ZERO = 0b0000_0010;
+        const INTERRUPT_DISABLE = 0b0000_0100;
+        const DECIMAL_MODE = 0b0000_1000; // Ricoh chip doesn't support this
+        const BREAK = 0b0001_0000;
+        const BREAK2 = 0b0010_0000; // Might be unused
+        const OVERFLOW = 0b0100_0000;
+        const NEGATIVE = 0b1000_0000;
+    }
+}
+
 #[derive(Debug)]
 #[allow(non_camel_case_types)]
 pub enum AddressingMode {
@@ -58,7 +71,7 @@ pub struct CPU {
     /// Register y
     pub register_y: u8,
 
-    pub status: u8,
+    pub status: StatusFlags,
 
     pub program_counter: u16,
     memory: [u8; 0xffff],
@@ -70,7 +83,7 @@ impl CPU {
             register_a: 0,
             register_x: 0,
             register_y: 0,
-            status: 0,
+            status: StatusFlags::from_bits_truncate(0b100100),
             program_counter: 0,
             memory: [0; 0xffff],
         }
@@ -119,15 +132,15 @@ impl CPU {
 
     fn update_zero_and_negative_flags(&mut self, result: u8) {
         if result == 0 {
-            self.status = self.status | 0b0000_0010;
+            self.status.insert(StatusFlags::ZERO);
         } else {
-            self.status = self.status & 0b1111_1101;
+            self.status.remove(StatusFlags::ZERO)
         }
 
         if result & 0b1000_0000 != 0 {
-            self.status = self.status | 0b1000_0000;
+            self.status.insert(StatusFlags::NEGATIVE);
         } else {
-            self.status = self.status & 0b0111_1111;
+            self.status.remove(StatusFlags::NEGATIVE)
         }
     }
 
@@ -158,10 +171,44 @@ impl CPU {
         self.update_zero_and_negative_flags(self.register_x);
     }
 
+    /// Handle the ADC (add with carry) instruction
+    fn adc(&mut self, mode: &AddressingMode) {
+        let address = self.get_operand_address(mode);
+        let value = self.mem_read(address);
+
+        self.add_to_register_a(value);
+    }
+
+    fn add_to_register_a(&mut self, value: u8) {
+        let sum = self.register_a as u16 + value as u16 + self.status.contains(StatusFlags::CARRY) as u16;
+
+        // If result overflows the maximum (255) then we need to set the carry flag
+        if sum > 0xff {
+            self.status.insert(StatusFlags::CARRY);
+        } else {
+            self.status.remove(StatusFlags::CARRY);
+        }
+
+        let result = sum as u8;
+
+        if (value ^ result) & (result ^ self.register_a) & 0x80 != 0 {
+            self.status.insert(StatusFlags::OVERFLOW);
+        } else {
+            self.status.remove(StatusFlags::OVERFLOW);
+        }
+
+        self.set_register_a(result)
+    }
+
+    fn set_register_a(&mut self, value: u8) {
+        self.register_a = value;
+        self.update_zero_and_negative_flags(self.register_a);
+    }
+
     pub fn reset(&mut self) {
         self.register_a = 0;
         self.register_x = 0;
-        self.status = 0;
+        self.status = StatusFlags::from_bits_truncate(0b100100);
 
         self.program_counter = self.mem_read_u16(PROGRAM_COUNTER_START);
     }
@@ -193,6 +240,10 @@ impl CPU {
                 0xa9 | 0xa5 | 0xb5 | 0xad | 0xbd | 0xb9 | 0xa1 | 0xb1 => {
                     self.lda(&opcode.mode);
                 }
+                /* ADC */
+                0x69 | 0x65 | 0x75 | 0x6d | 0x7d | 0x79 | 0x61 | 0x71 => {
+                    self.adc(&opcode.mode);
+                }
                 // STA (store accumulator) opcodes
                 0x85 | 0x95 | 0x8d | 0x9d | 0x99 | 0x81 | 0x91 => {
                     self.sta(&opcode.mode);
@@ -203,6 +254,8 @@ impl CPU {
                 0xE8 => self.inx(),
                 // BRK (break) opcode
                 0x00 => return,
+                // NOP (no operation) opcode
+                0xEA => (),
                 _ => todo!(),
             }
 
@@ -223,8 +276,8 @@ mod test {
         // Run LDA with 0x05 as the parameter, ending with a break
         cpu.load_and_run(vec![0xa9, 0x05, 0x00]);
         assert_eq!(cpu.register_a, 5);
-        assert!(cpu.status & 0b0000_0010 == 0);
-        assert!(cpu.status & 0b1000_0000 == 0);
+        assert!(cpu.status & StatusFlags::ZERO == StatusFlags { bits: 0 });
+        assert!(cpu.status & StatusFlags::NEGATIVE == StatusFlags { bits: 0 });
     }
 
     #[test]
@@ -233,7 +286,7 @@ mod test {
         // Run LDA with 0x00 as the parameter, ending with a break
         cpu.load_and_run(vec![0xa9, 0x00, 0x00]);
         assert_eq!(cpu.register_a, 0x00);
-        assert!(cpu.status & 0b0000_0010 == 0b10);
+        assert!(cpu.status & StatusFlags::ZERO == StatusFlags { bits: 2 });
     }
 
     #[test]
@@ -266,5 +319,39 @@ mod test {
         // which should fail
         cpu.load_and_run(vec![0xa9, 0xff, 0xaa, 0xe8, 0xe8, 0x00]);
         assert_eq!(cpu.register_x, 1)
+    }
+
+    #[test]
+    fn test_adc() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0x05, 0x69, 0x05, 0x00]);
+        assert_eq!(cpu.register_a, 10);
+    }
+
+    #[test]
+    /// Test that the carry flag is set when the result of an addition is greater than 255
+    fn test_adc_carry() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0xff, 0x69, 0x01, 0x00]);
+        assert_eq!(cpu.register_a, 0);
+        assert!(cpu.status.contains(StatusFlags::CARRY));
+    }
+
+    #[test]
+    fn test_adc_overflow() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0x7f, 0x69, 0x01, 0x00]);
+        assert_eq!(cpu.register_a, 0x80);
+        assert!(cpu.status.contains(StatusFlags::OVERFLOW));
+    }
+
+    #[test]
+    /// Test that no operation does nothing and sets status to zero
+    fn test_nop() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xea, 0x00]);
+        assert_eq!(cpu.register_a, 0);
+        // Default flags
+        assert!(cpu.status.contains(StatusFlags::from_bits_truncate(0b100100)));
     }
 }
