@@ -189,6 +189,31 @@ impl CPU {
         self.add_to_register_a(value.wrapping_neg().wrapping_sub(1) as u8);
     }
 
+    /// Handle the AND (bitwise and) instruction
+    fn and(&mut self, mode: &AddressingMode) {
+        let address = self.get_operand_address(mode);
+        let value = self.mem_read(address);
+
+        self.register_a &= value;
+        self.update_zero_and_negative_flags(self.register_a);
+    }
+
+    fn eor(&mut self, mode: &AddressingMode) {
+        let address = self.get_operand_address(mode);
+        let value = self.mem_read(address);
+
+        self.register_a ^= value;
+        self.update_zero_and_negative_flags(self.register_a);
+    }
+
+    fn ora(&mut self, mode: &AddressingMode) {
+        let address = self.get_operand_address(mode);
+        let value = self.mem_read(address);
+
+        self.register_a |= value;
+        self.update_zero_and_negative_flags(self.register_a);
+    }
+
     fn add_to_register_a(&mut self, value: u8) {
         let sum = self.register_a as u16 + value as u16 + self.status.contains(StatusFlags::CARRY) as u16;
 
@@ -261,6 +286,18 @@ impl CPU {
                 // STA (store accumulator) opcodes
                 0x85 | 0x95 | 0x8d | 0x9d | 0x99 | 0x81 | 0x91 => {
                     self.sta(&opcode.mode);
+                }
+                // AND (bitwise and) opcodes
+                0x29 | 0x25 | 0x35 | 0x2d | 0x3d | 0x39 | 0x21 | 0x31 => {
+                    self.and(&opcode.mode);
+                }
+                // EOR (bitwise exclusive or) opcodes
+                0x49 | 0x45 | 0x55 | 0x4d | 0x5d | 0x59 | 0x41 | 0x51 => {
+                    self.eor(&opcode.mode);
+                }
+                // ORA (bitwise or) opcodes
+                0x09 | 0x05 | 0x15 | 0x0d | 0x1d | 0x19 | 0x01 | 0x11 => {
+                    self.ora(&opcode.mode);
                 }
                 // TAX (Transfer accumulator to index x) opcode
                 0xAA => self.tax(),
@@ -381,6 +418,27 @@ mod test {
         cpu.load_and_run(vec![0xa9, 0x7f, 0xe9, 0x01, 0x00]);
         assert_eq!(cpu.register_a, 0x7e);
         assert!(cpu.status.contains(StatusFlags::OVERFLOW));
+    }
+
+    #[test]
+    fn test_and() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0x05, 0x29, 0x01, 0x00]);
+        assert_eq!(cpu.register_a, 1);
+    }
+
+    #[test]
+    fn test_eor() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0x05, 0x49, 0x01, 0x00]);
+        assert_eq!(cpu.register_a, 4);
+    }
+
+    #[test]
+    fn test_ora() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xa9, 0x05, 0x09, 0x01, 0x00]);
+        assert_eq!(cpu.register_a, 5);
     }
 
     #[test]
