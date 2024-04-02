@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use crate::opcodes;
+use bitflags::bitflags;
 
 const PROGRAM_COUNTER_START: u16 = 0xFFFC;
 const PROGRAM_MEMORY_START: u16 = 0x8000;
